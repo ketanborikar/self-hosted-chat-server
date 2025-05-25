@@ -7,16 +7,17 @@ logging.basicConfig(filename="/home/ubuntu/Project/log_websocket_debug.log", lev
 
 router = APIRouter()
 active_connections = {}
+default_recipients = {}  # ✅ Store last recipient per user
 
 @router.websocket("/ws/{username}")
 async def websocket_endpoint(websocket: WebSocket, username: str):
     logging.debug(f"Attempting WebSocket connection for: {username}")
-    
+
     try:
         await websocket.accept()
         logging.info(f"WebSocket connected for: {username}")
 
-        # ✅ Explicitly log authentication attempt
+        # ✅ Authenticate user
         if not validate_user(username):
             logging.warning(f"Authentication failed for {username}!")
             await websocket.send_text("❌ Authentication failed!")
@@ -24,29 +25,28 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
             return
 
         active_connections[username] = websocket  
-        logging.info(f"User {username} authenticated successfully.")
+        default_recipients[username] = None  # ✅ Initialize default recipient
 
-        # ✅ Log offline message retrieval process
+        # ✅ Retrieve offline messages
         offline_messages = get_offline_messages(username)
-        logging.debug(f"Offline messages for {username}: {offline_messages}")
-        
         for sender, message in offline_messages:
             await websocket.send_text(f"{sender}: {message}")
 
-        logging.info(f"User {username} received offline messages.")
-
-        # ✅ WebSocket should stay open with inactivity handling
         while True:
             try:
-                data = await asyncio.wait_for(websocket.receive_text(), timeout=120)  # ✅ Prevents automatic closure
-                
+                data = await asyncio.wait_for(websocket.receive_text(), timeout=120)  
                 logging.debug(f"Received data from {username}: {data}")
 
-                if ":" not in data:
-                    await websocket.send_text("❌ Invalid message format! Use 'recipient:message'.")
-                    continue
+                if ":" in data:  
+                    recipient, message = data.split(":", 1)
+                    default_recipients[username] = recipient  # ✅ Store last recipient
+                else:
+                    recipient = default_recipients.get(username)
+                    if not recipient:
+                        await websocket.send_text("❌ No recipient set! Please specify one.")
+                        continue
+                    message = data  
 
-                recipient, message = data.split(":", 1)
                 store_message(username, recipient, message)
                 logging.info(f"Stored message from {username} to {recipient}: {message}")
 
@@ -57,11 +57,12 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
 
             except asyncio.TimeoutError:
                 logging.warning(f"User {username} inactive—keeping connection alive.")
-                continue  # ✅ Ensures inactivity doesn’t close connection
+                continue  
                 
             except WebSocketDisconnect:
                 logging.info(f"User {username} disconnected.")
                 del active_connections[username]
+                del default_recipients[username]  # ✅ Cleanup recipient tracking
                 await websocket.close(code=1000)
                 logging.info(f"WebSocket properly closed for {username}.")
                 break
