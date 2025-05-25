@@ -60,9 +60,17 @@ def get_offline_messages(recipient):
     return messages
 
 def cleanup_old_messages():
-    """Delete messages older than 30 days."""
+    """Archive and delete messages older than 30 days."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
+
+    # ✅ Archive before deletion
+    cursor.execute("""
+        INSERT INTO archived_messages (sender, recipient, message, timestamp)
+        SELECT sender, recipient, message, timestamp FROM messages
+        WHERE timestamp < datetime('now', '-30 days')
+    """)
+
     cursor.execute("DELETE FROM messages WHERE timestamp < datetime('now', '-30 days')")
     conn.commit()
     conn.close()
